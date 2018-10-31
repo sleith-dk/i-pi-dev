@@ -1553,14 +1553,14 @@ def initialise(hw,U,T):
         #cutoff energy 0.005 eV
         #do not initialise motion due to slow modes
         #because it may gives large displacement
-        if av[i] < 0.0:
+        if av[i] < 0.005:
             am=0.0
         else:
             am=((bose(av[i],T)+0.5)*2.0/av[i])**0.5
             #am=(0.5*2.0/av[i])**0.5
         r=np.random.rand()
-        dis = dis + au[:,i]*am*np.cos(2.*np.pi*r)
-        vel = vel - av[i]*au[:,i]*am*np.sin(2.*np.pi*r)
+        dis = dis + au[i]*am*np.cos(2.*np.pi*r)
+        vel = vel - av[i]*au[i]*am*np.sin(2.*np.pi*r)
 
     return dis,vel
 

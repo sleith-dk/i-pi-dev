@@ -30,6 +30,7 @@
          USE LJ
          USE SG
          USE PSWATER
+         USE NETCDFIO
          USE F90SOCKETS, ONLY : open_socket, writebuffer, readbuffer
       IMPLICIT NONE
       
@@ -54,12 +55,27 @@
       
       ! PARAMETERS OF THE SYSTEM (CELL, ATOM POSITIONS, ...)
       DOUBLE PRECISION sigma, eps, rc, rn, ks ! potential parameters
-      INTEGER nat
+      INTEGER nat,ndat
       DOUBLE PRECISION pot, dpot, dist
       DOUBLE PRECISION, ALLOCATABLE :: atoms(:,:), forces(:,:), datoms(:,:)
       DOUBLE PRECISION cell_h(3,3), cell_ih(3,3), virial(3,3), mtxbuf(9), dip(3), charges(3), dummy(3,3,3), vecdiff(3)
       DOUBLE PRECISION volume
       DOUBLE PRECISION, PARAMETER :: fddx = 1.0d-5
+
+
+      ! CHARACTER(LEN=*),parameter :: NCFN = "EPH.nc"
+      CHARACTER(LEN=1024) :: NCFN 
+      DOUBLE PRECISION,parameter :: JTLENUNIT = 0.06466
+      DOUBLE PRECISION,parameter :: eVtoHartree = 0.0367493
+      DOUBLE PRECISION,parameter :: BohrtoAng= 0.529177208
+      DOUBLE PRECISION,parameter :: Fconv = eVtoHartree*BohrtoAng/JTLENUNIT
+
+      DOUBLE PRECISION, ALLOCATABLE :: DYNMAT(:,:)
+      DOUBLE PRECISION, ALLOCATABLE :: ATOMS0(:,:)
+      INTEGER, ALLOCATABLE :: DynAtoms(:),DynInd(:)
+      DOUBLE PRECISION, ALLOCATABLE :: DynMasses(:),DynMasses3(:)
+      DOUBLE PRECISION, ALLOCATABLE :: forces0(:),forces1(:)
+      DOUBLE PRECISION, ALLOCATABLE :: disp0(:),disp(:)
       
       ! NEIGHBOUR LIST ARRAYS
       INTEGER, DIMENSION(:), ALLOCATABLE :: n_list, index_list
@@ -69,7 +85,7 @@
 
       ! DMW
       DOUBLE PRECISION efield(3)
-      INTEGER i, j
+      INTEGER i, j, n
       
       ! parse the command line parameters
       ! intialize defaults
@@ -102,6 +118,8 @@
             verbose = 1
          ELSEIF (cmdbuffer == "-vv") THEN ! flag for verbose standard output
             verbose = 2
+         ELSEIF (cmdbuffer == "-f") THEN !flag to get the filename,only for -m hm
+            ccmd = 5
          ELSE
             IF (ccmd == 0) THEN
                WRITE(*,*) " Unrecognized command line argument", ccmd
@@ -112,6 +130,9 @@
                host = trim(cmdbuffer)//achar(0)
             ELSEIF (ccmd == 2) THEN
                READ(cmdbuffer,*) port
+            ELSEIF (ccmd == 5) THEN
+               NCFN = trim(cmdbuffer)
+               WRITE(*,*) "File name to read in:", NCFN
             ELSEIF (ccmd == 3) THEN
                IF (trim(cmdbuffer) == "lj") THEN
                   vstyle = 1
@@ -139,11 +160,16 @@
                   vstyle = 20
                ELSEIF (trim(cmdbuffer) == "ch4hcbe") THEN
                   vstyle = 21
+               !------------------------------------
+               !---added by Jing-Tao Lu------------
+               ELSEIF (trim(cmdbuffer) == "hm") THEN
+                  vstyle = 22  ! harmonic potential
+               !------------------------------------
                ELSEIF (trim(cmdbuffer) == "gas") THEN
                   vstyle = 0  ! ideal gas
                ELSE
                   WRITE(*,*) " Unrecognized potential type ", trim(cmdbuffer)
-                  WRITE(*,*) " Use -m [gas|lj|sg|harm|morse|zundel|qtip4pf|lepsm1|lepsm2|qtip4pf-efield|eckart|ch4hcbe] "
+                  WRITE(*,*) " Use -m [gas|lj|hm|sg|harm|morse|zundel|qtip4pf|lepsm1|lepsm2|qtip4pf-efield|eckart|ch4hcbe] "
                   STOP "ENDED"
                ENDIF
             ELSEIF (ccmd == 4) THEN
@@ -203,6 +229,14 @@
          ENDIF
          CALL prepot()
          isinit = .true.
+      ! harmonic potential
+      !ELSEIF (22 == vstyle) THEN
+      !   IF (par_count /= 0) THEN
+      !      WRITE(*,*) "Error: no ncfile information needed for harmonic potential."
+      !      STOP "ENDED"
+      !   ENDIF
+      !   !the NETCDF file name
+      !   !ncfn = "EPH.nc" 
       ELSEIF (4 == vstyle) THEN
          IF (par_count == 0) THEN ! defaults (OH stretch)
             vpars(1) = 1.8323926 ! r0
@@ -356,7 +390,7 @@
                nat = cbuf
                IF (verbose > 0) WRITE(*,*) " Allocating buffer and data arrays, with ", nat, " atoms"
                ALLOCATE(msgbuffer(3*nat))
-               ALLOCATE(atoms(nat,3), datoms(nat,3))
+               ALLOCATE(atoms(nat,3), datoms(nat,3),atoms0(nat,3))
                ALLOCATE(forces(nat,3))
                atoms = 0.0d0
                datoms = 0.0d0
@@ -536,6 +570,141 @@
                ELSEIF (vstyle == 2) THEN
                   CALL SG_getall(rc, nat, atoms, cell_h, cell_ih, index_list, n_list, pot, forces, virial)
                ENDIF
+
+               !================================================
+               !harmonic potential added by Jing-Tao Lu
+               IF (vstyle == 22) THEN
+                       !readin atoms0 in unit of Angstrom
+                       CALL READ_NETCDF_VAR2D(ncfn,"XYZEq",atoms0)
+                       IF (verbose > 1) then
+                           print*, "==========================="
+                           print*, shape(atoms0)
+                           print*, "Equilibrium atomic positions (Ang):"
+                           call  write_matrix(transpose(atoms0))
+                           print*, "============================"
+                       end if
+
+                       !readin the dynamical matrix
+                       CALL READ_NETCDF_VAR2D(ncfn,"DynMat",DynMat)
+                       IF (verbose > 1) then
+                           print*, "==========================="
+                           print*, "Dynamical matrix:"
+                           call  write_matrix(DynMat)
+                           print*, "============================"
+                       END IF
+                       !readin the dynamical atoms
+                       CALL READ_NETCDF_VAR1D(ncfn,"DynamicAtoms",DynAtoms)
+                       !readin the dynamical atoms
+                       CALL READ_NETCDF_VAR1DR(ncfn,"DynamicMasses",DynMasses)
+                       if (verbose >1) then
+                           print*, "==========================="
+                           print*, "Masses of Dynamical atoms:"
+                           print*, DynMasses 
+                           print*, "============================"
+                       end if
+                       ndat = size(DynAtoms)
+                       !note that the dynamical atom index are python index,
+                       !counting from 0, we change to fortran index
+                       do i=1,ndat
+                         DynAtoms(i)= DynAtoms(i)+1
+                       enddo
+                       if (verbose >=1) then
+                           print*, "==========================="
+                           print*, "Dynamical atoms:"
+                           print*, DynAtoms
+                           print*, "==========================="
+                       end if
+
+
+                       allocate(dynind(3*ndat),dynmasses3(3*ndat))
+                       do i=1,ndat
+                         n = dynatoms(i)
+                         do j=1,3
+                            dynind((i-1)*3+j) = (n-1)*3+j
+                            dynmasses3((i-1)*3+j) = dynmasses(i)
+                         enddo
+                       enddo
+                       !print*, "==========================="
+                       !print*, "Dynamic index:"
+                       !print *, dynind
+                       !print*, "==========================="
+
+
+                       if (verbose >1) then
+                           print*, "==========================="
+                           print*, "Current atomic positions (Ang):"
+                           call write_matrix(atoms*BohrtoAng) 
+                           print*, "==========================="
+                       end if
+                       allocate(disp(3*nat),disp0(3*ndat))
+                       !Note, the array atom0 read in from NETCDF is of the shape (3, natoms), 
+                       !we need to do the transpose, thus transpose(atoms0)
+                       if (verbose >1) then
+                           print*, "==========================="
+                           print*, "displacements away from equ. (Ang):"
+                           call write_matrix(atoms*BohrtoAng-transpose(atoms0))
+                           print*, "==========================="
+                       end if
+                       disp = reshape(transpose(atoms*BohrtoAng-transpose(atoms0)), [3*nat])
+
+                       !---------------------------------------------------
+                       !also do unit conversion
+                       !the length unit of jt codes:  0.06466 Angstrom
+                       !we also need the mass scaled one
+                       do i=1,3*ndat
+                         disp0(i) = disp(dynind(i))/JTLENUNIT*sqrt(dynmasses3(i))
+                       enddo
+                       !---------------------------------------------------
+                       !print *, "disp0:"
+                       !print *, disp0*JTLENUNIT/sqrt(dynmasses3(1))
+
+
+                       allocate(forces1(3*nat),forces0(3*ndat))
+                       forces0 = -1.0d0*matmul(DynMat,disp0)
+                       if (verbose > 1) then
+                           print*, "==========================="
+                           print*, "forces to the atoms (JT unit):"
+                           call write_matrix(reshape(forces0, (/ ndat, 3 /), order=(/ 2, 1 /)))
+                           print*, "==========================="
+                       end if
+
+                       !potential energy in Hartree
+                       pot = dot_product(disp0,forces0) * (-0.5)
+                       if (verbose >=1) then
+                           print*, "============"
+                           print*, "Potential energy:"
+                           print*, pot
+                           print*, "============"
+                       end if
+
+                       !unit conversion to Hartree/Bohr
+                       do i=1,3*ndat
+                        forces0(i) = forces0(i)*Fconv*sqrt(dynmasses3(i))
+                       enddo
+                       if (verbose >1) then
+                           print*, "==========================="
+                           print*, "forces to the atoms (Hartree/Bohr):"
+                           call write_matrix(reshape(forces0, (/ ndat, 3 /), order=(/ 2, 1 /)))
+                           print*, "==========================="
+                       end if
+
+                       forces1 = 0.0
+                       do i=1,ndat*3
+                         forces1(dynind(i)) = forces0(i)
+                       enddo
+                       forces = reshape(forces1, (/nat,3/), order=(/ 2, 1 /))
+                       if (verbose >=1) then
+                           print*, "==========================="
+                           print*, "forces to the atoms (Hartree/Bohr):"
+                           call write_matrix(forces)
+                           print*, "==========================="
+                       end if
+
+                       deallocate(dynmat,dynatoms,atoms0,dynmasses,dynind,dynmasses3)
+                       deallocate(forces0,forces1,disp0,disp)
+               ENDIF
+               !================================================
+
                IF (verbose > 0) WRITE(*,*) " Calculated energy is ", pot
             ENDIF
             hasdata = .true. ! Signal that we have data ready to be passed back to the wrapper
@@ -584,7 +753,7 @@
     CONTAINS
       SUBROUTINE helpmessage
          ! Help banner
-         WRITE(*,*) " SYNTAX: driver.x [-u] -h hostname -p port -m [gas|lj|sg|harm|morse|zundel|qtip4pf|pswater|lepsm1|lepsm2|qtip4p-efield|eckart|ch4hcbe] "
+         WRITE(*,*) " SYNTAX: driver.x [-u] -h hostname -p port -m [gas|lj|hm|sg|harm|morse|zundel|qtip4pf|pswater|lepsm1|lepsm2|qtip4p-efield|eckart|ch4hcbe] "
          WRITE(*,*) "         -o 'comma_separated_parameters' [-v] "
          WRITE(*,*) ""
          WRITE(*,*) " For LJ potential use -o sigma,epsilon,cutoff "

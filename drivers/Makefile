@@ -21,26 +21,33 @@
 
 .PHONY: all modules clean
 
+NETCDFPATH=/zdata/groups/common/nicpa/2018-feb/XeonE5-2665/netcdf-serial/4.6.0/gnu-7.3.0
+NETCDFFPATH=$(HOME)/.local/lib
+
+NETCDFPATH=/usr/local/intelsoft/
+NETCDFFPATH=/usr/local/intelsoft/
+
 FLAGS=-g -O3 -Wall
 CFLAGS=$(FLAGS)
-FFLAGS=$(FLAGS) -ffree-line-length-none -ffixed-line-length-none -Wno-maybe-uninitialized
+FFLAGS=$(FLAGS) -ffree-line-length-none -ffixed-line-length-none -Wno-maybe-uninitialized -L$(NETCDFPATH)/lib -I$(NETCDFPATH)/include/ 
 
-MODULES=distance.f90 LJ.f90 SG.f90 pes/pswater.f90 pes/LEPS.f90
+MODULES=distance.f90 LJ.f90 NETCDF.f90 SG.f90 pes/pswater.f90 pes/LEPS.f90
 PES=pes/zundel.f pes/morse.f pes/qtip4pf.f pes/efield.f90 pes/eckart.f90 pes/utility.f pes/ch52008.f
 OBJECTS=$(MODULES:%.f90=%.o) $(PES:%.f=%.o)
-FC=gfortran
-CC=gcc
+FC=ifort
+CC=icc
 all: driver.x #driver_pure.x
 
 sockets.o: sockets.c
 	$(CC) $(CFLAGS) -c -o sockets.o sockets.c
 
 driver.x: $(OBJECTS) sockets.o fsockets.o driver.o | $(OBJECTS)
-	$(FC) $(FFLAGS) -o driver.x $^
+	$(FC) $(FFLAGS) -o driver.x $^ -lnetcdf  -lnetcdff
 	ln -fs ../drivers/driver.x ../bin/i-pi-driver
 
 driver_pure.x: $(OBJECTS) fsockets_pure.o driver.o | $(OBJECTS)
-	$(FC) $(FFLAGS) -o driver_pure.x $^
+	$(FC) $(FFLAGS) -o driver_pure.x $^  -lnetcdf  -lnetcdff
+	#$(FC) $(FFLAGS) -o driver_pure.x $^  -lnetcdf $(NETCDFFPATH)/libnetcdff.a 
 
 %.o: %.f90
 	$(FC) $(FFLAGS) -c $< -o $@

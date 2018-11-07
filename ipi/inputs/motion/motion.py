@@ -24,23 +24,24 @@ Classes:
 import numpy as np
 from copy import copy
 import ipi.engine.initializer
-from ipi.engine.motion import Motion, Dynamics, Replay, GeopMotion, NEBMover, DynMatrixMover, MultiMotion, AlchemyMC, InstantonMotion
+from ipi.engine.motion import Motion, Dynamics, Replay, GeopMotion, NEBMover, DynMatrixMover, MultiMotion, AlchemyMC
+from ipi.engine.motion import Displace
+from ipi.engine.motion import DynMatrixMover
 from ipi.utils.inputvalue import *
 from ipi.inputs.thermostats import *
 from ipi.inputs.initializer import *
 from .geop import InputGeop
-from .instanton import InputInst
 from .neb import InputNEB
 from .dynamics import InputDynamics
 from .phonons import InputDynMatrix
 from .alchemy import InputAlchemy
+from .displace import InputDisplace
 from ipi.utils.units import *
 
 __all__ = ['InputMotion']
 
 
 class InputMotionBase(Input):
-
     """Motion calculation input class.
 
     A class to encompass the different "motion" calculations.
@@ -57,7 +58,7 @@ class InputMotionBase(Input):
 
     attribs = {"mode": (InputAttribute, {"dtype": str,
                                          "help": "How atoms should be moved at each step in the simulatio. 'replay' means that a simulation is restarted from a previous simulation.",
-                                         "options": ['vibrations', 'minimize', 'replay', 'neb', 'dynamics', 'alchemy', 'instanton', 'dummy']})}
+                                         "options": ['vibrations', 'minimize', 'replay', 'neb', 'dynamics', 'alchemy', 'displace', 'dummy']})}
 
     fields = {"fixcom": (InputValue, {"dtype": bool,
                                       "default": True,
@@ -77,9 +78,11 @@ class InputMotionBase(Input):
                                               "help": "Option for phonon computation"}),
               "alchemy": (InputAlchemy, {"default": {},
                                          "help": "Option for alchemical exchanges"}),
-              "instanton": (InputInst, {"default": {},
-                                        "help": "Option for Instanton optimization"})
+              "displace": (InputDisplace, {"default": {},
+                                         "help": "Option for fixed displacement calculations"})
+
               }
+
     dynamic = {}
 
     default_help = "Allow chosing the type of calculation to be performed. Holds all the information that is calculation specific, such as geometry optimization parameters, etc."
@@ -119,9 +122,9 @@ class InputMotionBase(Input):
             self.mode.store("alchemy")
             self.alchemy.store(sc)
             tsc = 1
-        elif type(sc) is InstantonMotion:
-            self.mode.store("instanton")
-            self.instanton.store(sc)
+        elif isinstance(sc, Displace):
+            self.mode.store("displace")
+            self.displace.store(sc)
             tsc = 1
         else:
             raise ValueError("Cannot store Mover calculator of type " + str(type(sc)))
@@ -154,17 +157,16 @@ class InputMotionBase(Input):
             sc = DynMatrixMover(fixcom=self.fixcom.fetch(), fixatoms=self.fixatoms.fetch(), **self.vibrations.fetch())
         elif self.mode.fetch() == "alchemy":
             sc = AlchemyMC(fixcom=self.fixcom.fetch(), fixatoms=self.fixatoms.fetch(), **self.alchemy.fetch())
-        elif self.mode.fetch() == "instanton":
-            sc = InstantonMotion(fixcom=self.fixcom.fetch(), fixatoms=self.fixatoms.fetch(), **self.instanton.fetch())
+        elif self.mode.fetch() == "displace":
+            sc = Displace(fixcom=self.fixcom.fetch(), fixatoms=self.fixatoms.fetch(), **self.displace.fetch())
         else:
             sc = Motion()
-            # raise ValueError("'" + self.mode.fetch() + "' is not a supported motion calculation mode.")
+            #raise ValueError("'" + self.mode.fetch() + "' is not a supported motion calculation mode.")
 
         return sc
 
 
 class InputMotion(InputMotionBase):
-
     """ Extends InputThermoBase to allow the definition of a multithermo """
 
     attribs = copy(InputMotionBase.attribs)

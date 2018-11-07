@@ -64,6 +64,14 @@ class InputDisplace(InputDictionary):
                                   "default": 100,
                                   "help": "Length of memory kernel for the\
                              phonon baths."}),
+        "nc": (InputValue, {"dtype": int,
+                                  "default": 1,
+                                  "help": "1 or 0, including nonconservative force or\
+                            not."}),
+        "berry": (InputValue, {"dtype": int,
+                                  "default": 1,
+                                  "help": "1 or 0, including Berry force or\
+                            not."}),
     }
 
 
@@ -88,3 +96,5 @@ class InputDisplace(InputDictionary):
         self.vbias.store(displace.vbias)
         self.eta.store(displace.eta)
         self.memlen.store(displace.memlen)
+        self.nc.store(displace.nc)
+        self.berry.store(displace.berry)

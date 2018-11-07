@@ -9,6 +9,7 @@ import time
 import numpy as np
 from numpy import linalg as LA
 import os.path
+import sys
 
 #from ipi.utils.depend import dstrip
 from ipi.engine.motion import Motion
@@ -81,7 +82,8 @@ class Displace(Motion):
     """
 
     def __init__(self, timestep=1.0, nmd=1024, temp=4.2, vbias=0.0, eta=0.0, \
-                 memlen=200,thermostat=None, fixcom=False, fixatoms=None, displacement=None):
+                 memlen=100,nc=1,berry=1,rm=0,thermostat=None,\
+                 fixcom=False, fixatoms=None, displacement=None):
         """
         Initialises Replay.
         Args:
@@ -99,6 +101,11 @@ class Displace(Motion):
         dself.vbias = depend_value(name='vbias', value=vbias)
         dself.eta= depend_value(name='eta', value=eta)
         dself.memlen= depend_value(name='memlen', value=memlen)
+        dself.nc = depend_value(name='nc', value=nc)
+        dself.berry = depend_value(name='berry', value=berry)
+
+        #default: dnot include the renormalization
+        dself.rm= rm
 
         print 'self.eta', self.eta
         print 'self.memlen', self.memlen
@@ -131,9 +138,10 @@ class Displace(Motion):
         #--------------------------------------------------------------
         #reading in from nc file
         #--------------------------------------------------------------
-
         phfn="PHSigma.nc"
         ephfn="EPH.nc"
+        #AuBZ structure
+        ephfn2="EPH_AuBZ.nc"
         if os.path.isfile(phfn):
                  print "Reading ", phfn
                  phs=ReadPHSCFile(phfn)
@@ -179,7 +187,7 @@ class Displace(Motion):
                  self.SigL=eph.SigL
                  self.SigR=eph.SigR
                  self.gwl=eph.wl        
-                 #masses of dynamical atoms
+
                  #indices of atoms that connect to the bath in python index
                  #(starting from 0) 
                  ecats=[i+18 for i in range(13)]
@@ -193,13 +201,53 @@ class Displace(Motion):
                  self.phbath = True
 
 
+        #AuBZ
+        if os.path.isfile(ephfn2):
+                 eph=ReadEPHNCFile(ephfn2)
+
+                 if self.phbath :
+                 #ToDo:
+                 #CHECK information in the two files are consistent!
+                     pass
+
+                 #initial xyz coordinates from netcdf
+                 self.XYZEq = eph.XYZEq
+                 #flattened XYZ
+                 self.XYZEqf = eph.XYZEq.flatten()
+                 self.lenall= len(self.XYZEqf)
+                 self.hw = eph.hw
+                 self.U = eph.U
+                 self.DynMat = eph.DynMat
+                 self.dynatoms = eph.DynamicAtoms        
+                 self.DynMasses=eph.DynamicMasses
+        
+                 self.SigL=eph.SigL
+                 self.SigR=eph.SigR
+                 self.gwl=eph.wl        
+
+                 #manual settings:
+                 #indices of atoms that connect to the bath in python index
+                 #(starting from 0) 
+                 ecats=[i+32 for i in range(20)]
+                 phcatsl=[i+32 for i in range(5)] 
+                 phcatsr=[i+32+15 for i in range(5)] 
+                 #atoms that are fixed
+                 leftfixed = np.arange(2*16)
+                 rightfixed = np.arange(2*16+20,2*16+20+3*16)
+                 self.fixatoms=np.concatenate((leftfixed,rightfixed), axis=0)
+                 #a vector rotation along which is forbidden
+                 self.fixrotation =  None
+                 self.ebath = True
+                 self.phbath = True
 
 
+        #mass of dynamic atoms in a.u.
         self.dynmass3 = np.array([[a,a,a] for a in self.DynMasses]).flatten()
         self.dynindex = np.array([[a*3,a*3+1,a*3+2] for a in\
                                   self.dynatoms],dtype=int).flatten()
 
-        self.nph = len(self.dynindex)     
+
+        self.nph = len(self.dynindex)
         #self.ml = 200
         self.debye = max(self.gwl)
 
@@ -224,9 +272,10 @@ class Displace(Motion):
             #Electron bath
             self.elbath = ThermoQLE(temp=self.temp,dt=self.dt,ethermo=0.0,\
                         cats=ecats,nmd=self.nmd,wmax=1.0,nw=500,bias=self.vbias,\
-                        efric=eph.efric,exim=eph.xim,exip=eph.xip,\
-                        zeta1=eph.zeta1,zeta2=eph.zeta2,\
+                        efric=eph.efric,exim=eph.xim*self.nc,exip=eph.xip,\
+                        zeta1=eph.zeta1*self.rm,zeta2=eph.zeta2*self.berry,\
                         mdstep=self.mdstep,xyzeqf=self.XYZEqf)
+
             self.thermolist.append(self.elbath)
         if self.phbath:
             #Phonon bath
@@ -295,9 +344,13 @@ class Displace(Motion):
         ##########################################################################
         #print "initialise the velocity and displacment"
         dis,vel = initialise(self.hw,self.U,self.temp)
+        #print "dis:",dis
+        #print "vel:",vel
     
         #q0 is the initial coordinates (ipy unit)
         ipyddis0 = dis/self.dynmass3**0.5/Constants.lconv
+        print "dis(Bohr):",ipyddis0
+
         ipydis = np.zeros(len(self.XYZEqf))
         for ind,val in enumerate(self.dynindex):
             ipydis[val] = ipyddis0[ind]
@@ -431,45 +484,39 @@ class Displace(Motion):
              for i in range(self.beads.nbeads):
                 self.initialipyqp()
                 self.beads.q[i] = self.q0
-                self.beads.p[i] = self.p0 
+                self.beads.p[i] = self.p0
   
         print 'step',self.mdstep
         self.integrator.step(self.mdstep)
+        #time.sleep(120)
 
         #saving trajectories, Jing-Tao version
         #only saved the first bead??
         self.trajectories[self.mdstep,:]=reducedp(self.dynindex,\
                         (self.beads.q[0][:]*Constants.bohr2ang-self.XYZEqf)\
                                 /Constants.jtmdlen)*self.dynmass3**0.5
-
-        
-        #writing out the power spectrum
-        f = open("power.dat","w")
-        self.power = powerspec(self.trajectories,self.dt*Constants.tconv,self.nmd) #self.dt*self.au2fs
-        for i in range(len(self.power)):
-                if(self.power[i,0] < self.debye*self.debyefactor):
-                   f.write("%f     %f \n"%(self.power[i,0],self.power[i,1]))             
  
+
         print 'Storing trajectory'
         with open("traj.ANI","a") as Tr:
           Tr.write("%i  \n"%len(self.XYZEq))
           Tr.write("\n")
+
           for i in range(0,self.beads.q.shape[1],3):
-            Tr.write("Au %f %f %f \n"%(Constants.bohr2ang*self.beads.q[0][i],\
+            Tr.write("%s %f %f %f \n"%(self.beads.names[i/3],Constants.bohr2ang*self.beads.q[0][i],\
                                        Constants.bohr2ang*self.beads.q[0][i+1],\
                                        Constants.bohr2ang*self.beads.q[0][i+2])) 
-
         
         #Harmonic energy of the system
         p0=reducedp(self.dynindex,self.beads.p[0])
         energy0 = 0.5*np.dot(p0/self.dynmass3/Constants.amass2emass,p0)/Constants.eV2hartree
-        print "kinetic energy: ",energy0
+        print "kinetic energy (eV): ",energy0
         q0=reducedp(self.dynindex,\
                 (self.beads.q[0][:]*Constants.bohr2ang-self.XYZEqf)\
                     /Constants.jtmdlen)*self.dynmass3**0.5
         energy1 = 0.5*np.dot(q0,np.dot(self.DynMat,q0))
-        print "potential energy: ",energy1
-        print "total: ", energy0+energy1
+        print "potential energy (eV): ",energy1
+        print "total (eV): ", energy0+energy1
         self.etot = energy0+energy1
         print 'Storing energy (eV)'
         with open("energy.dat","a") as Tr2:
@@ -479,8 +526,21 @@ class Displace(Motion):
         self.nrep = 8 #how many total runs
         self.idd = 0  #current run
         if self.mdstep==self.nmd:
-          self.idd += 1
-        self.dump(self.nrep,self.idd)
+            self.idd += 1
+
+        modint = self.nmd/64
+        if self.mdstep%modint == 0 and self.mdstep !=0 :
+            #writing out the power spectrum
+            #to get the average energy we need to integrate this curve
+            #and divide by 2\pi, times 2 (since we only have positive freq.)
+            f = open("power.dat","w")
+            self.power = powerspec(self.trajectories,self.dt*Constants.tconv,self.nmd) #self.dt*self.au2fs
+            for i in range(len(self.power)):
+                    #max output frequency set to 2*max(hw)
+                    if(self.power[i,0] < np.max(self.hw)*2.0):
+                       f.write("%f     %f \n"%(self.power[i,0],self.power[i,1]))             
+            #dump current state into nc file
+            self.dump(self.nrep,self.idd)
 
         #counter
         self.t+=self.mdstep*self.dt
@@ -811,6 +871,7 @@ class ThermoQLE(Thermostat):
 
         print "thermostat parameters:\n"
         print "number of md steps: "+str(self.nmd)
+        print "applied bias: "+str(self.bias)
 
 
 
@@ -991,6 +1052,7 @@ class ThermoQLE(Thermostat):
                 +np.dot(self.bias*self.exim,rq)\
                 -np.dot(self.bias*self.zeta1,rq)\
                 -np.dot(self.bias*self.zeta2,rp)
+
         fluc = self.noise[:,step+id,:].flatten()
         #friction and noise
         sfor = det + fluc
@@ -1000,7 +1062,10 @@ class ThermoQLE(Thermostat):
         lfor *= self.fconv
 
         llfor = np.array(np.split(lfor,self.beads.nbeads))
+
         return llfor
+
+
 
 
 
@@ -1544,6 +1609,7 @@ def initialise(hw,U,T):
     initial displacement and velocity from the dynamical matrix
     according to the temperature.
     """
+    #tot=0.0
     av=hw
     au=U
 
@@ -1557,11 +1623,15 @@ def initialise(hw,U,T):
             am=0.0
         else:
             am=((bose(av[i],T)+0.5)*2.0/av[i])**0.5
+            #tot += am**2*av[i]**2*0.5
             #am=(0.5*2.0/av[i])**0.5
         r=np.random.rand()
+        #20181031 fix a bug :
+        #where au[i] replaces au[:,i]
+        #in the following two lines
         dis = dis + au[i]*am*np.cos(2.*np.pi*r)
         vel = vel - av[i]*au[i]*am*np.sin(2.*np.pi*r)
-
+    #print "total E:", tot
     return dis,vel
 
 

@@ -10,6 +10,7 @@ import numpy as np
 from numpy import linalg as LA
 import os.path
 import sys
+from netCDF4 import Dataset
 
 #from ipi.utils.depend import dstrip
 from ipi.engine.motion import Motion
@@ -18,10 +19,8 @@ from ipi.utils.depend import *
 from ipi.engine.thermostats import ThermoLangevin
 from ipi.engine.motion.dynamics import *
 
-from netCDF4 import Dataset
 from pymd.ebath  import *
 from pymd.phbath  import *
-
 from pymd.spectrum  import *
 from pymd.functions  import *
 from pymd.iout import Write2NetCDFFile,ReadNetCDFVar
@@ -82,7 +81,7 @@ class Displace(Motion):
     """
 
     def __init__(self, timestep=1.0, nmd=1024, temp=4.2, vbias=0.0, eta=0.0, \
-                 memlen=100,nc=1,berry=1,rm=0,thermostat=None,\
+                 memlen=100,nc=1,berry=1,thermostat=None,\
                  fixcom=False, fixatoms=None, displacement=None):
         """
         Initialises Replay.
@@ -103,9 +102,6 @@ class Displace(Motion):
         dself.memlen= depend_value(name='memlen', value=memlen)
         dself.nc = depend_value(name='nc', value=nc)
         dself.berry = depend_value(name='berry', value=berry)
-
-        #default: dnot include the renormalization
-        dself.rm= rm
 
         print 'self.eta', self.eta
         print 'self.memlen', self.memlen
@@ -228,35 +224,40 @@ class Displace(Motion):
                  #manual settings:
                  #indices of atoms that connect to the bath in python index
                  #(starting from 0) 
-                 ecats=[i+32 for i in range(20)]
-                 phcatsl=[i+32 for i in range(5)] 
-                 phcatsr=[i+32+15 for i in range(5)] 
+                 #ecats=[i+32 for i in range(20)]
+                 ecats=eph.ecats
+                 print "ecats",ecats
+                 #phcatsl=[i+32 for i in range(5)] 
+                 phcatsl=eph.lcats
+                 #phcatsr=[i+32+15 for i in range(5)] 
+                 phcatsr = eph.rcats
                  #atoms that are fixed
-                 leftfixed = np.arange(2*16)
-                 rightfixed = np.arange(2*16+20,2*16+20+3*16)
-                 self.fixatoms=np.concatenate((leftfixed,rightfixed), axis=0)
+                 #leftfixed = np.arange(2*16)
+                 #rightfixed = np.arange(2*16+20,2*16+20+3*16)
+                 #self.fixatoms=np.concatenate((leftfixed,rightfixed), axis=0)
+                 self.fixatoms=eph.FixedAtoms
                  #a vector rotation along which is forbidden
-                 self.fixrotation =  None
+                 self.constraint = eph.constraint
+
                  self.ebath = True
                  self.phbath = True
 
 
-        #mass of dynamic atoms in a.u.
+
+
         self.dynmass3 = np.array([[a,a,a] for a in self.DynMasses]).flatten()
         self.dynindex = np.array([[a*3,a*3+1,a*3+2] for a in\
                                   self.dynatoms],dtype=int).flatten()
 
 
-        self.nph = len(self.dynindex)
+        self.nph = len(self.dynindex)     
         #self.ml = 200
         self.debye = max(self.gwl)
 
-        #v,vv=LA.eigh(self.DynMat)
-        #print "hw from DynMat", np.sqrt(v)
-        #print "hw from NetCDF", self.hw
-
-
-        #print 'displace:fixatoms', self.fixatoms
+        v,vv=LA.eigh(self.DynMat)
+        print "hw from DynMat", np.sqrt(v)
+        print "hw from NetCDF", self.hw
+        print 'displace:fixatoms', self.fixatoms
         #print self.dynatoms
         #print self.hw
         #print phcatsl
@@ -273,7 +274,7 @@ class Displace(Motion):
             self.elbath = ThermoQLE(temp=self.temp,dt=self.dt,ethermo=0.0,\
                         cats=ecats,nmd=self.nmd,wmax=1.0,nw=500,bias=self.vbias,\
                         efric=eph.efric,exim=eph.xim*self.nc,exip=eph.xip,\
-                        zeta1=eph.zeta1*self.rm,zeta2=eph.zeta2*self.berry,\
+                        zeta1=eph.zeta1,zeta2=eph.zeta2*self.berry,\
                         mdstep=self.mdstep,xyzeqf=self.XYZEqf)
 
             self.thermolist.append(self.elbath)
@@ -349,7 +350,7 @@ class Displace(Motion):
     
         #q0 is the initial coordinates (ipy unit)
         ipyddis0 = dis/self.dynmass3**0.5/Constants.lconv
-        print "dis(Bohr):",ipyddis0
+        #print "dis(Bohr):",ipyddis0
 
         ipydis = np.zeros(len(self.XYZEqf))
         for ind,val in enumerate(self.dynindex):
@@ -486,6 +487,7 @@ class Displace(Motion):
                 self.beads.q[i] = self.q0
                 self.beads.p[i] = self.p0
   
+
         print 'step',self.mdstep
         self.integrator.step(self.mdstep)
         #time.sleep(120)
@@ -495,13 +497,15 @@ class Displace(Motion):
         self.trajectories[self.mdstep,:]=reducedp(self.dynindex,\
                         (self.beads.q[0][:]*Constants.bohr2ang-self.XYZEqf)\
                                 /Constants.jtmdlen)*self.dynmass3**0.5
+
+
+        
  
 
         print 'Storing trajectory'
         with open("traj.ANI","a") as Tr:
           Tr.write("%i  \n"%len(self.XYZEq))
           Tr.write("\n")
-
           for i in range(0,self.beads.q.shape[1],3):
             Tr.write("%s %f %f %f \n"%(self.beads.names[i/3],Constants.bohr2ang*self.beads.q[0][i],\
                                        Constants.bohr2ang*self.beads.q[0][i+1],\
@@ -510,13 +514,13 @@ class Displace(Motion):
         #Harmonic energy of the system
         p0=reducedp(self.dynindex,self.beads.p[0])
         energy0 = 0.5*np.dot(p0/self.dynmass3/Constants.amass2emass,p0)/Constants.eV2hartree
-        print "kinetic energy (eV): ",energy0
+        print "kinetic energy: ",energy0
         q0=reducedp(self.dynindex,\
                 (self.beads.q[0][:]*Constants.bohr2ang-self.XYZEqf)\
                     /Constants.jtmdlen)*self.dynmass3**0.5
         energy1 = 0.5*np.dot(q0,np.dot(self.DynMat,q0))
-        print "potential energy (eV): ",energy1
-        print "total (eV): ", energy0+energy1
+        print "potential energy: ",energy1
+        print "total: ", energy0+energy1
         self.etot = energy0+energy1
         print 'Storing energy (eV)'
         with open("energy.dat","a") as Tr2:
@@ -527,24 +531,23 @@ class Displace(Motion):
         self.idd = 0  #current run
         if self.mdstep==self.nmd:
             self.idd += 1
-
         modint = self.nmd/64
-        if self.mdstep%modint == 0 and self.mdstep !=0 :
+        if self.mdstep%modint == 0 and self.mdstep !=0:
             #writing out the power spectrum
-            #to get the average energy we need to integrate this curve
-            #and divide by 2\pi, times 2 (since we only have positive freq.)
             f = open("power.dat","w")
             self.power = powerspec(self.trajectories,self.dt*Constants.tconv,self.nmd) #self.dt*self.au2fs
             for i in range(len(self.power)):
                     #max output frequency set to 2*max(hw)
                     if(self.power[i,0] < np.max(self.hw)*2.0):
                        f.write("%f     %f \n"%(self.power[i,0],self.power[i,1]))             
-            #dump current state into nc file
+            #dump current state
             self.dump(self.nrep,self.idd)
+
 
         #counter
         self.t+=self.mdstep*self.dt
         self.mdstep += 1
+        print "end of step", self.mdstep
         
 class DummyIntegrator(dobject):
     """ No-op integrator for (PI)MD """
@@ -564,6 +567,7 @@ class DummyIntegrator(dobject):
         self.fixcom = motion.fixcom
         self.fixatoms = motion.fixatoms
         self.dynindex = motion.dynindex
+        self.constraint = motion.constraint
         dself = dd(self)
         dself.dt = dd(motion).dt
 
@@ -614,6 +618,7 @@ class GLEIntegrator(DummyIntegrator):
         self.fixcom = motion.fixcom
         self.fixatoms = motion.fixatoms
         self.dynindex = motion.dynindex
+        self.constraint= motion.constraint
         dself = dd(self)
         dself.dt = dd(motion).dt
 
@@ -624,14 +629,16 @@ class GLEIntegrator(DummyIntegrator):
         tlen = len(self.beads.p.flatten())
         plen = tlen/self.beads.nbeads
         self.eqforce = np.zeros((self.beads.nbeads,tlen))
+
+        
         #print 'eq len',self.eqforce.shape 
         self.projector = np.ones((self.beads.nbeads,plen))
+        #project out the fixed atoms firstly
         for i in self.fixatoms:
             for j in range(3):
                 self.projector[:,i*3+j]=0.0
         print "force projector:"
         print self.projector
-        #print "fixatoms:", self.fixatoms
 
         #self.projector = np.zeros((self.beads.nbeads,plen))
         #for j in self.dynindex:
@@ -651,8 +658,14 @@ class GLEIntegrator(DummyIntegrator):
         """Velocity Verlet momenta propagator."""
         #print self.forces.f
         #self.beads.p += dstrip(self.forces.f) * (self.dt * 0.5)
-        self.beads.p += ((dstrip(self.forces.f)-self.eqforce) * self.projector) * (self.dt * 0.5)
-        #the projector projects out fixed atoms
+        #project out the fixed atoms
+        print "project out fixed atoms\n"
+        tmpf = ((dstrip(self.forces.f)-self.eqforce) * self.projector)
+        #project out other constraints one by one
+        print "project out the constraint\n"
+        for vec in self.constraint:
+            tmpf = tmpf * (np.ones(len(vec))-vec)
+        self.beads.p +=  tmpf * (self.dt * 0.5)
 
 
     def qstep(self):
@@ -871,7 +884,6 @@ class ThermoQLE(Thermostat):
 
         print "thermostat parameters:\n"
         print "number of md steps: "+str(self.nmd)
-        print "applied bias: "+str(self.bias)
 
 
 
@@ -1052,7 +1064,6 @@ class ThermoQLE(Thermostat):
                 +np.dot(self.bias*self.exim,rq)\
                 -np.dot(self.bias*self.zeta1,rq)\
                 -np.dot(self.bias*self.zeta2,rp)
-
         fluc = self.noise[:,step+id,:].flatten()
         #friction and noise
         sfor = det + fluc
@@ -1062,10 +1073,7 @@ class ThermoQLE(Thermostat):
         lfor *= self.fconv
 
         llfor = np.array(np.split(lfor,self.beads.nbeads))
-
         return llfor
-
-
 
 
 
@@ -1562,6 +1570,29 @@ def ReadEPHNCFile(filename):
     eph.DynamicMasses= np.array(file.variables['DynamicMasses'])  #Dynamic atoms
     eph.DynamicAtoms= np.array(file.variables['DynamicAtoms'])
 
+    try:
+        eph.lcats= np.array(file.variables['lcats'])
+    except:
+        eph.lcats = None
+    try:
+        eph.rcats= np.array(file.variables['rcats'])
+    except:
+        eph.rcats = None
+    try:
+        eph.ecats= np.array(file.variables['ecats'])
+    except:
+        eph.ecats=None
+
+    try:
+        eph.FixedAtoms= np.array(file.variables['FixedAtoms'])
+    except:
+        eph.FixedAtoms= np.array([])
+
+    try:
+        eph.constraint = np.array(file.variables['constraint'])
+    except:
+        eph.constraint = np.array([])
+
     file.close()
     return eph
 
@@ -1609,7 +1640,6 @@ def initialise(hw,U,T):
     initial displacement and velocity from the dynamical matrix
     according to the temperature.
     """
-    #tot=0.0
     av=hw
     au=U
 
@@ -1623,15 +1653,11 @@ def initialise(hw,U,T):
             am=0.0
         else:
             am=((bose(av[i],T)+0.5)*2.0/av[i])**0.5
-            #tot += am**2*av[i]**2*0.5
             #am=(0.5*2.0/av[i])**0.5
         r=np.random.rand()
-        #20181031 fix a bug :
-        #where au[i] replaces au[:,i]
-        #in the following two lines
         dis = dis + au[i]*am*np.cos(2.*np.pi*r)
         vel = vel - av[i]*au[i]*am*np.sin(2.*np.pi*r)
-    #print "total E:", tot
+
     return dis,vel
 
 

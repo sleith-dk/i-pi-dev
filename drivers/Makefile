@@ -21,8 +21,8 @@
 
 .PHONY: all modules clean
 
-NETCDFPATH=/zdata/groups/common/nicpa/2018-feb/XeonE5-2665/netcdf-serial/4.6.0/gnu-7.3.0
-NETCDFFPATH=$(HOME)/.local/lib
+#NETCDFPATH=/zdata/groups/common/nicpa/2018-feb/XeonE5-2665/netcdf-serial/4.6.0/gnu-7.3.0
+#NETCDFFPATH=$(HOME)/.local/lib
 
 NETCDFPATH=/usr/local/intelsoft/
 NETCDFFPATH=/usr/local/intelsoft/

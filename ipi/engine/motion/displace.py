@@ -108,12 +108,13 @@ class Displace(Motion):
 
 
         self.debyefactor = 2.0
+        print self.debyefactor
 
         self.phbath = False
         self.ebath = False
 
 
-
+        
         print "time step (unit: 2.4188843e-17 s):"
         print self.dt
 
